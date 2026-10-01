@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>نظام إدارة وتعديل بيانات المخيم الميداني</title>
+  <!-- مكتبة SheetJS لقراءة وتعديل ملفات Excel و CSV محلياً وفورياً -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    body {
+      background-color: #f8fafc;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* الشريط العلوي */
+    header {
+      background: #0f172a;
+      color: #ffffff;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      z-index: 10;
+      flex-wrap: wrap;
+    }
+
+    .brand h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .brand p {
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    /* أزرار التحكم والعمليات */
+    .actions-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .file-input-wrapper {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+    }
+
+    .btn {
+      border: none;
+      outline: none;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-file {
+      background-color: #334155;
+      color: #f8fafc;
+    }
+    .btn-file:hover { background-color: #475569; }
+
+    .file-input-wrapper input[type=file] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+
+    .btn-mic {
+      background-color: #2563eb;
+      color: #ffffff;
+    }
+    .btn-mic:hover { background-color: #1d4ed8; }
+
+    .btn-mic.recording {
+      background-color: #dc2626;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+    }
+
+    .btn-save {
+      background-color: #16a34a;
+      color: #ffffff;
+    }
+    .btn-save:hover { background-color: #15803d; }
+
+    .status-text {
+      font-size: 0.85rem;
+      color: #38bdf8;
+      font-weight: 500;
+    }
+
+    /* منطقة عرض الجدول */
+    .table-container {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+      background: #f1f5f9;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #64748b;
+      gap: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    th, td {
+      padding: 12px 16px;
+      text-align: right;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 0.9rem;
+    }
+
+    th {
+      background-color: #f8fafc;
+      color: #334155;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      box-shadow: 0 1px 1px rgba(0,0,0,0.05);
+    }
+
+    tr:hover td {
+      background-color: #f8fafc;
+    }
+
+    /* تظليل الخلية المعدلة لايف */
+    .cell-updated {
+      background-color: #fef08a !important;
+      transition: background-color 2s ease;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <h1>مساعد بيانات المخيم الميداني</h1>
+      <p id="loadedFileName">لم يتم تحديد ملف بعد</p>
+    </div>
+
+    <div class="actions-bar">
+      <span class="status-text" id="statusLabel">اختر ملفك للبدء</span>
+
+      <!-- زر اختيار الملف من الجهاز -->
+      <div class="file-input-wrapper">
+        <button class="btn btn-file">📁 اختيار ملف (Excel/CSV)</button>
+        <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" onchange="handleFile(event)">
+      </div>
+
+      <!-- زر التسجيل الصوتي -->
+      <button class="btn btn-mic" id="recordBtn" onclick="toggleRecording()" disabled>
+        <span>🎤</span>
+        <span id="btnText">تحدث للتعديل</span>
+      </button>
+
+      <!-- زر حفظ وتنزيل الملف بعد التعديل -->
+      <button class="btn btn-save" id="saveBtn" onclick="exportUpdatedFile()" disabled>
+        💾 تنزيل النسخة المعدلة
+      </button>
+    </div>
+  </header>
+
+  <div class="table-container" id="tableContainer">
+    <div class="empty-state" id="emptyState">
+      <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <p>قم باختيار ملف إكسل أو CSV من جهازك لتبدأ التعديل عليه بالأوامر الصوتية</p>
+    </div>
+    <table id="dataTable" style="display: none;">
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    // رابط Webhook الذي سيقوم بتحليل الصوت بالـ AI وإرجاع التعديل
+    const BACKEND_URL = "http://YOUR_SERVER_IP:5678/webhook/voice-edit";
+
+    let currentData = []; // البيانات على شكل مصفوفة كائنات
+    let tableHeaders = [];
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+
+    // 1. قراءة الملف من الجهاز وعرضه مباشرة
+    function handleFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      document.getElementById('loadedFileName').innerText = file.name;
+      document.getElementById('statusLabel').innerText = "جاري قراءة البيانات...";
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+
+        currentData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+        if (currentData.length > 0) {
+          tableHeaders = Object.keys(currentData[0]);
+          renderTable();
+          document.getElementById('recordBtn').disabled = false;
+          document.getElementById('saveBtn').disabled = false;
+          document.getElementById('statusLabel').innerText = "جاهز لتلقي الأوامر الصوتية";
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // 2. بناء الجدول في الصفحة
+    function renderTable() {
+      const thead = document.getElementById('tableHead');
+      const tbody = document.getElementById('tableBody');
+      const emptyState = document.getElementById('emptyState');
+      const dataTable = document.getElementById('dataTable');
+
+      thead.innerHTML = "";
+      tbody.innerHTML = "";
+
+      const trHead = document.createElement('tr');
+      tableHeaders.forEach(header => {
+        const th = document.createElement('th');
+        th.innerText = header;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+
+      currentData.forEach((row, rowIndex) => {
+        const tr = document.createElement('tr');
+        tr.id = `row-${rowIndex}`;
+        tableHeaders.forEach(header => {
+          const td = document.createElement('td');
+          td.id = `cell-${rowIndex}-${header}`;
+          td.innerText = row[header];
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+
+      emptyState.style.display = "none";
+      dataTable.style.display = "table";
+    }
+
+    // 3. إدارة تسجيل الصوت
+    async function toggleRecording() {
+      if (!isRecording) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
+          mediaRecorder.onstop = processVoiceCommand;
+
+          mediaRecorder.start();
+          isRecording = true;
+          document.getElementById('recordBtn').classList.add('recording');
+          document.getElementById('btnText').innerText = "إنهاء وإرسال";
+          document.getElementById('statusLabel').innerText = "جاري الاستماع إليك...";
+        } catch (err) {
+          alert("يرجى تفعيل إذن الميكروفون بالمتصفح");
+        }
+      } else {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+        isRecording = false;
+        document.getElementById('recordBtn').classList.remove('recording');
+        document.getElementById('btnText').innerText = "تحدث للتعديل";
+        document.getElementById('statusLabel').innerText = "جاري معالجة الأمر والبيانات...";
+      }
+    }
+
+    // 4. إرسال الصوت مع أعمدة الجدول إلى السيرفر
+    async function processVoiceCommand() {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'command.webm');
+      formData.append('headers', JSON.stringify(tableHeaders));
+
+      try {
+        const response = await fetch(BACKEND_URL, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (response.ok) {
+          const result = await response.json(); 
+          /* 
+             السيرفر يرجع JSON يحتوي الإجراء، مثلاً:
+             {
+               "action": "update",
+               "search_col": "رقم الخيمة",
+               "search_val": "12",
+               "target_col": "الحالة",
+               "new_value": "تم التسليم"
+             }
+             أو في حال إضافة صف جديد:
+             {
+               "action": "append",
+               "row_data": { "رقم الخيمة": "55", "الحالة": "جديد" }
+             }
+          */
+          applyLiveUpdate(result);
+          document.getElementById('statusLabel').innerText = "تم تعديل البيانات بنجاح!";
+        } else {
+          document.getElementById('statusLabel').innerText = "تعذر فهم الأمر، أعد المحاولة.";
+        }
+      } catch (err) {
+        document.getElementById('statusLabel').innerText = "خطأ في الاتصال بالخادم.";
+      }
+    }
+
+    // 5. تطبيق التعديل لايف في الجدول مباشرة أمام المندوب
+    function applyLiveUpdate(instruction) {
+      if (instruction.action === "update") {
+        currentData.forEach((row, index) => {
+          if (String(row[instruction.search_col]).trim() === String(instruction.search_val).trim()) {
+            row[instruction.target_col] = instruction.new_value;
+            
+            // وميض أصفر على الخلية المعدلة
+            const cell = document.getElementById(`cell-${index}-${instruction.target_col}`);
+            if (cell) {
+              cell.innerText = instruction.new_value;
+              cell.classList.add('cell-updated');
+              setTimeout(() => cell.classList.remove('cell-updated'), 2000);
+            }
+          }
+        });
+      } else if (instruction.action === "append") {
+        currentData.push(instruction.row_data);
+        renderTable();
+      }
+    }
+
+    // 6. تصدير وتنزيل الملف بعد التعديل
+    function exportUpdatedFile() {
+      const worksheet = XLSX.utils.json_to_sheet(currentData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "بيانات محدثة");
+      XLSX.writeFile(workbook, "بيانات_المخيم_المحدثة.xlsx");
+    }
+  </script>
+</body>
+</html>

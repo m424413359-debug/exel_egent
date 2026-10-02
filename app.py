@@ -19,11 +19,9 @@ app.add_middleware(
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-print(f"--> Keys Loaded: GROQ={'OK' if GROQ_API_KEY else 'MISSING'}, GEMINI={'OK' if GEMINI_API_KEY else 'MISSING'}")
-
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Voice Sheet Backend is Ready"}
+    return {"status": "online", "model": "gemini-3.5-flash-lite"}
 
 @app.post("/webhook/voice-edit")
 async def voice_edit(
@@ -36,13 +34,12 @@ async def voice_edit(
 
     temp_audio_path = f"/tmp/{audio.filename}"
     try:
-        # 1. حفظ ملف الصوت محلياً
+        # 1. حفظ ملف الصوت
         content = await audio.read()
-        print(f"Audio size: {len(content)} bytes")
         with open(temp_audio_path, "wb") as f:
             f.write(content)
 
-        # 2. تحويل الصوت لنص عربي عبر Groq Whisper
+        # 2. تحويل الصوت لنص عبر Groq Whisper
         groq_client = Groq(api_key=GROQ_API_KEY)
         with open(temp_audio_path, "rb") as file:
             transcription = groq_client.audio.transcriptions.create(
@@ -58,9 +55,9 @@ async def voice_edit(
         if not spoken_text:
             raise HTTPException(status_code=400, detail="لم يتم التقاط أي صوت واضح")
 
-        # 3. توجيه Gemini عبر Direct REST API لتجنب أي مشاكل بالـ SDK
+        # 3. توجيه Gemini 3.5 Flash-Lite لاستخراج الـ JSON
         system_prompt = f"""
-أنت مساعد ذكي لإدارة وتعديل بيانات المخيم.
+أنت مساعد ذكي لإدارة وتعديل جداول بيانات المخيم.
 أعمدة الجدول المتاحة هي:
 {headers}
 
@@ -70,14 +67,14 @@ async def voice_edit(
 أرجع فقط كائن JSON خالص بالصيغة التالية دون أي كود Markdown أو نصوص إضافية:
 {{
     "action": "update",
-    "search_col": "<اسم العمود الأنسب للبحث مثل رقم الهوية أو الاسم أو No>",
+    "search_col": "<اسم العمود الأنسب للبحث مثل رقم الهوية أو اسم رب الأسرة رباعي أو No>",
     "search_val": "<القيمة التي نبحث عنها>",
     "target_col": "<اسم العمود المراد تعديل قيمته من القائمة بالضبط>",
     "new_value": "<القيمة الجديدة>"
 }}
 """
 
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key={GEMINI_API_KEY}"
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [
                 {

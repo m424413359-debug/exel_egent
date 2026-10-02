@@ -1,14 +1,13 @@
 import os
 import json
+import traceback
+import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
-from google import genai
-from google.genai import types
 
 app = FastAPI()
 
-# تفعيل CORS للسماح لصفحة GitHub Pages بالتواصل مع السيرفر
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,30 +16,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# جلب مفاتيح الـ API من متغيرات البيئة
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-groq_client = Groq(api_key=GROQ_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+print(f"--> Keys Loaded: GROQ={'OK' if GROQ_API_KEY else 'MISSING'}, GEMINI={'OK' if GEMINI_API_KEY else 'MISSING'}")
 
 @app.get("/")
 def home():
-    return {"status": "running", "message": "Voice Sheet Assistant Backend is Live!"}
+    return {"status": "online", "message": "Voice Sheet Backend is Ready"}
 
 @app.post("/webhook/voice-edit")
 async def voice_edit(
     audio: UploadFile = File(...),
-    headers: str = Form(...)  # يستقبل أسماء أعمدة الجدول بصيغة JSON string
+    headers: str = Form(...)
 ):
+    print("\n--- NEW VOICE COMMAND RECEIVED ---")
+    if not GROQ_API_KEY or not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Missing API Keys in Render Environment Variables!")
+
+    temp_audio_path = f"/tmp/{audio.filename}"
     try:
-        # 1. حفظ ملف الصوت مؤقتاً للمعالجة
-        audio_bytes = await audio.read()
-        temp_audio_path = f"/tmp/{audio.filename}"
+        # 1. حفظ ملف الصوت محلياً
+        content = await audio.read()
+        print(f"Audio size: {len(content)} bytes")
         with open(temp_audio_path, "wb") as f:
-            f.write(audio_bytes)
+            f.write(content)
 
         # 2. تحويل الصوت لنص عربي عبر Groq Whisper
+        groq_client = Groq(api_key=GROQ_API_KEY)
         with open(temp_audio_path, "rb") as file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(audio.filename, file.read()),
@@ -50,45 +53,59 @@ async def voice_edit(
             )
 
         spoken_text = str(transcription).strip()
+        print(f"Spoken text: '{spoken_text}'")
 
-        # 3. توجيه Gemini لتحليل الأمر وإرجاع JSON دقيق
-        system_instruction = f"""
-        أنت مساعد ذكي مخصص لتعديل جداول البيانات.
-        أعمدة الجدول المتاحة هي: {headers}
-        
-        مهمتك: قراءة كلام المندوب وتحويله إلى أمر تعديل دقيق بصيغة JSON فقط بدون أي نصوص أو markdown إضافية.
-        
-        القواعد:
-        1. إذا كان الأمر لتعديل قيمة موجودة (مثال: "عدل خيمة 12 إلى استلمت"):
-        {{
-            "action": "update",
-            "search_col": "<اسم العمود الذي نبحث به>",
-            "search_val": "<القيمة التي نبحث عنها>",
-            "target_col": "<اسم العمود المراد تعديله>",
-            "new_value": "<القيمة الجديدة>"
-        }}
-        
-        2. إذا كان الأمر لإضافة صف جديد (مثال: "سجل خيمة 40 بحالة جديد"):
-        {{
-            "action": "append",
-            "row_data": {{ "<اسم العمود>": "<القيمة>" }}
-        }}
-        
-        تأكد أن أسماء الأعمدة مطابقة تماماً للموجود في قائمة الأعمدة.
-        """
+        if not spoken_text:
+            raise HTTPException(status_code=400, detail="لم يتم التقاط أي صوت واضح")
 
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=spoken_text,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json"
-            )
-        )
+        # 3. توجيه Gemini عبر Direct REST API لتجنب أي مشاكل بالـ SDK
+        system_prompt = f"""
+أنت مساعد ذكي لإدارة وتعديل بيانات المخيم.
+أعمدة الجدول المتاحة هي:
+{headers}
 
-        result_json = json.loads(response.text)
+المستخدم قال: "{spoken_text}"
+
+مهمتك: تحديد ما يريد تعديله ومطابقته بدقة مع أعمدة الجدول.
+أرجع فقط كائن JSON خالص بالصيغة التالية دون أي كود Markdown أو نصوص إضافية:
+{{
+    "action": "update",
+    "search_col": "<اسم العمود الأنسب للبحث مثل رقم الهوية أو الاسم أو No>",
+    "search_val": "<القيمة التي نبحث عنها>",
+    "target_col": "<اسم العمود المراد تعديل قيمته من القائمة بالضبط>",
+    "new_value": "<القيمة الجديدة>"
+}}
+"""
+
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": system_prompt}]
+                }
+            ],
+            "generationConfig": {
+                "response_mime_type": "application/json"
+            }
+        }
+
+        gemini_res = requests.post(gemini_url, json=payload, timeout=20)
+        if gemini_res.status_code != 200:
+            print(f"Gemini API Error: {gemini_res.text}")
+            raise HTTPException(status_code=500, detail=f"Gemini Error: {gemini_res.text}")
+
+        res_data = gemini_res.json()
+        raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+        print(f"Gemini JSON: {raw_text}")
+
+        result_json = json.loads(raw_text)
         result_json["transcribed_text"] = spoken_text
         return result_json
 
     except Exception as e:
+        traceback.print_exc()
+        print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
